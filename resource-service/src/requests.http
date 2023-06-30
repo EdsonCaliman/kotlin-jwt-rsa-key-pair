@@ -1,0 +1,22 @@
+### open
+GET http://localhost:5000/open
+Accept: application/json
+
+### login
+POST http://localhost:4000/login
+Content-Type: application/json
+
+{
+  "user": "edson",
+  "password": "123456"
+}
+
+> {% client.global.set("auth_token", response.body.token); %}
+
+### closed
+http://localhost:5000/closed
+Authorization: Bearer {{auth_token}}
+
+### jwks
+GET http://localhost:4000/.well-known/jwks
+Accept: application/json

@@ -1,12 +1,13 @@
 package com.example.resourceservice.filters
 
-import io.jsonwebtoken.Jwts
-import io.jsonwebtoken.io.Decoders
-import io.jsonwebtoken.security.Keys
+import com.example.resourceservice.exceptions.JWTVerificationException
+import com.nimbusds.jose.crypto.RSASSAVerifier
+import com.nimbusds.jose.jwk.JWK
+import com.nimbusds.jose.jwk.JWKSet
+import com.nimbusds.jwt.SignedJWT
 import jakarta.servlet.FilterChain
 import jakarta.servlet.http.HttpServletRequest
 import jakarta.servlet.http.HttpServletResponse
-import org.springframework.beans.factory.annotation.Value
 import org.springframework.http.HttpHeaders
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken
 import org.springframework.security.core.context.SecurityContextHolder
@@ -14,14 +15,13 @@ import org.springframework.security.core.userdetails.User
 import org.springframework.security.web.authentication.WebAuthenticationDetailsSource
 import org.springframework.stereotype.Component
 import org.springframework.web.filter.OncePerRequestFilter
-import java.security.Key
+import java.net.URL
+import java.security.NoSuchAlgorithmException
+import java.security.spec.InvalidKeySpecException
 import java.util.Date
 
 @Component
-class LoginFilter(
-    @Value("\${jwt.secret}")
-    private val secret: String,
-) : OncePerRequestFilter() {
+class LoginFilter: OncePerRequestFilter() {
     override fun doFilterInternal(
         request: HttpServletRequest,
         response: HttpServletResponse,
@@ -34,7 +34,7 @@ class LoginFilter(
         }
 
         val token = header.split(" ")[1].trim()
-        if (validateToken(token)) {
+        if (tokenValid(token) && !expiredToken(token)) {
             val user = getUser(token)
             val userDetails = User(user, user, listOf())
             val authentication = UsernamePasswordAuthenticationToken(userDetails, null, userDetails.authorities)
@@ -44,31 +44,41 @@ class LoginFilter(
         filterChain.doFilter(request, response)
     }
 
-    private fun validateToken(token: String): Boolean {
+    private fun expiredToken(token: String): Boolean {
         val expiration: Date = getExpiration(token)
-
-        if (expiration.before(Date())) {
-            throw Exception("Token expired")
-        }
-
-        return true
+        return expiration.before(Date())
     }
 
     private fun getUser(token: String): String {
-        val jwtToken = Jwts.parserBuilder().setSigningKey(getSignInKey()).build()
-        val claims = jwtToken.parseClaimsJws(token).body
-        return claims.subject
+        val signedJWT = SignedJWT.parse(token);
+        return signedJWT.jwtClaimsSet.subject
     }
 
     private fun getExpiration(token: String): Date {
-        val jwtToken = Jwts.parserBuilder().setSigningKey(getSignInKey()).build()
-        val claims = jwtToken.parseClaimsJws(token).body
-        return claims.expiration
+        val signedJWT = SignedJWT.parse(token);
+        return signedJWT.jwtClaimsSet.expirationTime
+    }
+    private fun tokenValid(token: String): Boolean {
+        try {
+            val signedJWT = SignedJWT.parse(token);
+            val jwk = getKey(signedJWT.jwtClaimsSet.jwtid)
+            val verifier = RSASSAVerifier(jwk.toRSAKey())
+            return signedJWT.verify(verifier)
+        } catch (e: NoSuchAlgorithmException) {
+            throw JWTVerificationException(e);
+        } catch (e: InvalidKeySpecException) {
+            throw JWTVerificationException(e);
+        }
     }
 
-    private fun getSignInKey(): Key? {
-        val keyBytes = Decoders.BASE64.decode(secret)
-        return Keys.hmacShaKeyFor(keyBytes)
+    private fun getKey(keyId: String): JWK {
+        val keysUrl = URL("http://localhost:4000/.well-known/jwks")
+        try {
+            val jwk = JWKSet.load(keysUrl)
+            return jwk.keys.first { it.keyID == keyId }
+        } catch (e: Exception) {
+            throw JWTVerificationException(e)
+        }
     }
 
 }
